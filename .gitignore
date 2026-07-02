@@ -1,0 +1,15 @@
+# Large raw data file — see README "Data files" section for how to obtain/regenerate it
+library_build_mains.csv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
