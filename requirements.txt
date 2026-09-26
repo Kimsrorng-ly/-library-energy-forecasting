@@ -1,8 +1,27 @@
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-lightgbm
-xgboost
-jupyter
+# ── Core data science ────────────────────────────────────────────────────────
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scikit-learn>=1.2.0
+scipy>=1.10.0
+joblib>=1.2.0
+
+# ── Tree-based models (baseline & benchmark) ─────────────────────────────────
+lightgbm>=4.0.0
+xgboost>=1.7.0
+
+# ── Deep learning (PyTorch suite) ────────────────────────────────────────────
+torch>=2.0.0
+
+# ── TensorBoard (experiment tracking & visualization) ────────────────────────
+tensorboard>=2.15.0
+tensorboardX>=2.6.0
+
+# ── Notebook environment ─────────────────────────────────────────────────────
+jupyter>=1.0.0
+ipykernel>=6.20.0
+ipywidgets>=8.0.0
+
+# ── Progress & utilities ─────────────────────────────────────────────────────
+tqdm>=4.65.0

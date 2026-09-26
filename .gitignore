@@ -1,15 +1,33 @@
-# Large raw data file — see README "Data files" section for how to obtain/regenerate it
+# ── Large Raw Data Files ───────────────────────────────────────────────────
 library_build_mains.csv
 
-# Jupyter
-.ipynb_checkpoints/
+# ── Model Checkpoints & Temporary Artifacts ────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.joblib
+*.pkl
 
-# Python
+# ── Python & Cache ─────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# ── Jupyter Notebooks ──────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ── Environments ───────────────────────────────────────────────────────────
 .venv/
 venv/
+env/
+ENV/
 
-# OS
+# ── IDEs & Operating System ────────────────────────────────────────────────
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+desktop.ini

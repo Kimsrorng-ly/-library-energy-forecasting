@@ -1,86 +1,96 @@
-# Model Comparison — Full Results
+# Model Comparison & Benchmark Results
 
-All models trained and evaluated on the identical pipeline described in the main
-[README](../README.md): `library_cleaned_master.csv` → gap-aware feature engineering → 70/30
-chronological split (28,873 train / 12,375 test) → `RandomizedSearchCV` tuning with
-`TimeSeriesSplit(gap=144)` → single evaluation on the held-out test set.
+All models are evaluated on an identical, strictly chronological 70/30 split of the I-BLEND library smart meter dataset (Feb 2014 – Nov 2017).
+- **Target:** Power consumption 24 hours ahead ($t + 144$ steps at 10-minute resolution).
+- **Evaluation Rule:** Chronological train/test split (no data leakage). Test set touched exactly once for final reporting.
+- **Fair Benchmarking Standard:** All 7 architectures are trained on the unified 27 domain-engineered feature set (`library_featured_v2.csv`).
 
-## Final test-set performance
+---
 
-| Model | MAE (W) | RMSE (W) | R² |
-|---|---|---|---|
-| Naive Persistence | 3580 | 6225 | 0.387 |
-| Linear Regression | 3989 | 5743 | 0.478 |
-| LightGBM | 3374 | 4643 | 0.659 |
-| Extra Trees | 3271 | 4495 | 0.680 |
-| XGBoost | 3180 | 4405 | 0.693 |
+## 1. Grand 7-Model Benchmark (Held-out Test Set)
 
-## Train vs. test (overfitting check)
+Evaluated on the exact same 12,375 untouched test readings:
 
-| Model | Train R² | Test R² | R² gap |
-|---|---|---|---|
-| LightGBM | 0.817 | 0.659 | 0.158 |
-| Extra Trees | 0.809 | 0.680 | 0.129 |
-| XGBoost | 0.793 | 0.693 | 0.100 |
+| Rank | Model | Model Family | Test MAE (W) | Test RMSE (W) | Test R² | Train R² | Overfitting Gap (Train - Test) |
+|:---:|:---|:---|:---:|:---:|:---:|:---:|:---:|
+| 1 | **XGBoost** | Gradient Boosted Trees | **2,942** | **3,966** | **0.751** | 0.794 | **0.043** |
+| 2 | **LightGBM** | Gradient Boosted Trees | 3,087 | 4,150 | 0.727 | 0.867 | 0.139 |
+| 3 | **Extra Trees** | Randomized Ensembles | 3,279 | 4,278 | 0.710 | 0.946 | 0.235 |
+| 4 | **PyTorch MLP** | Deep Dense Neural Network | 3,469 | 4,636 | 0.660 | 0.828 | 0.168 |
+| 5 | **PyTorch BiLSTM** | Bidirectional Recurrent | 3,850 | 5,183 | 0.576 | 0.761 | 0.185 |
+| 6 | **PyTorch TCN** | Dilated Causal Convolutional | 4,058 | 5,557 | 0.512 | 0.828 | 0.316 |
+| 7 | **PyTorch Transformer** | Multi-Head Self-Attention | 5,030 | 6,887 | 0.251 | 0.850 | 0.599 |
 
-XGBoost shows the smallest train/test gap of the three, suggesting the best generalization among
-these models on this dataset, despite all three showing some expected overfitting relative to
-their training performance.
+### Baselines for Reference
+| Baseline Method | Test MAE (W) | Test RMSE (W) | Test R² | Description |
+|---|:---:|:---:|:---:|---|
+| **Naive Persistence** | 3,580 | 6,225 | 0.387 | $\hat{y}_{t+24\text{h}} = y_t$ (repeats current value) |
+| **Linear Regression** | 3,989 | 5,743 | 0.478 | Standard ordinary least squares on tabular features |
 
-## 5-fold TimeSeriesSplit cross-validation (training set only, gap=144)
+---
 
-**Extra Trees**
+## 2. Feature Progression & Ablation Analysis
 
-| Fold | MAE | RMSE | R² |
-|---|---|---|---|
-| 1 | 5268 | 8025 | 0.086 |
-| 2 | 4265 | 5596 | 0.364 |
-| 3 | 3059 | 4337 | 0.491 |
-| 4 | 2463 | 3047 | 0.760 |
-| 5 | 2970 | 4408 | 0.651 |
-| **Mean** | **3605** | **5082** | **0.470** |
-| Std | 1021 | 1678 | 0.235 |
+To evaluate the contribution of domain-informed feature engineering, we compare the tree models across both experimental phases:
+- **Phase 1 (8-Feature Baseline):** Trained on `library_cleaned_master.csv` (`power`, `occupancy_count`, `hour`, `dayofweek`, `month`, `weekend`, `power_lag_144`, `power_lag_1008`).
+- **Phase 2 (27-Feature Domain Engineering):** Trained on `library_featured_v2.csv` (adding trigonometric cyclical time, BMS campus operational schedules, occupancy dynamics, and rolling statistical moments).
 
-**XGBoost**
+| Model | 8-Feature Test MAE (W) | 8-Feature Test R² | 27-Feature Test MAE (W) | 27-Feature Test R² | Test MAE Reduction | Test R² Gain |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **XGBoost** | 3,180 | 0.693 | **2,942** | **0.751** | **-238 W (-7.5%)** | **+0.058 (+8.4%)** |
+| **LightGBM** | 3,374 | 0.659 | **3,087** | **0.727** | **-287 W (-8.5%)** | **+0.068 (+10.3%)** |
+| **Extra Trees** | 3,271 | 0.680 | **3,279** | **0.710** | **-8 W (-0.2%)** | **+0.030 (+4.4%)** |
 
-| Fold | MAE | RMSE | R² |
-|---|---|---|---|
-| 1 | 5603 | 8492 | -0.023 |
-| 2 | 4276 | 5573 | 0.369 |
-| 3 | 2794 | 3971 | 0.573 |
-| 4 | 2475 | 3148 | 0.744 |
-| 5 | 2950 | 4224 | 0.679 |
-| **Mean** | **3620** | **5081** | **0.469** |
-| Std | 1167 | 1875 | 0.277 |
+> **Key Insight:** Even with the 8-feature baseline, XGBoost ($R^2 = 0.693$) outperformed the best Deep Learning model ($R^2 = 0.660$). When given the full 27 features, XGBoost widens its lead substantially ($R^2 = 0.751$, MAE drops below 3,000 W) with an exceptional generalization gap of only 0.043.
 
-Early folds score lower for both models since they train on less history — expected behavior for
-`TimeSeriesSplit`, not a red flag.
+---
 
-## Best hyperparameters found (RandomizedSearchCV, n_iter=20)
+## 3. Key Analytical Takeaways
 
-**Extra Trees**
+1. **Tabular Feature Engineering vs. Raw Sequences:**
+   - Tree models (XGBoost, LightGBM, Extra Trees) and PyTorch MLP achieve strong performance because Notebook 05's engineered features (cyclical trigonometric calendar, university schedule indicators, occupancy dynamics, and 24h/48h autoregressive lags) explicitly provide the temporal context.
+   - Deep sequence models (LSTM, TCN) capture momentum and daily diurnal patterns ($R^2 \approx 0.51 - 0.58$), but the lag features already provide this information more compactly and reliably for tree ensembles.
+
+2. **Sample Efficiency & Model Capacity:**
+   - The Transformer architecture possesses the highest representational capacity but shows severe overfitting on this single-building dataset ($R^2_{\text{train}} = 0.850$ vs $R^2_{\text{test}} = 0.251$, gap = 0.599).
+   - Transformers require significantly larger multi-building datasets or pre-training to compete with boosted trees in building energy forecasting.
+
+3. **Generalization Gap (Overfitting):**
+   - XGBoost exhibits the smallest generalization gap ($\Delta R^2 = 0.043$), followed by LightGBM ($\Delta R^2 = 0.139$) and PyTorch MLP ($\Delta R^2 = 0.168$).
+
+---
+
+## 4. Architecture & Hyperparameter Summary
+
+### Tree-Based Models (Trained on 27 Features with TimeSeriesSplit CV)
+- **XGBoost:** `n_estimators=300`, `max_depth=4`, `learning_rate=0.01`, `subsample=0.8`, `colsample_bytree=0.7`, `reg_alpha=0.5`, `reg_lambda=3.0`, `tree_method='hist'`
+- **LightGBM:** `n_estimators=300`, `num_leaves=31`, `learning_rate=0.01`, `colsample_bytree=0.7`, `subsample=0.8`, `reg_alpha=1.0`, `reg_lambda=2.0`
+- **Extra Trees:** `n_estimators=300`, `max_depth=12`, `max_features=1.0`, `min_samples_split=10`, `min_samples_leaf=4`, `bootstrap=True`
+
+### Deep Learning Models (PyTorch Suite, Trained on 27 Features)
+- **PyTorch MLP:** 
+  - Layers: `Linear(27, 256) -> BatchNorm1d -> ReLU -> Dropout(0.3) -> Linear(256, 128) -> BatchNorm1d -> ReLU -> Dropout(0.2) -> Linear(128, 64) -> ReLU -> Linear(64, 1)`
+  - Optimizer: AdamW (`lr=1e-3`, `weight_decay=1e-4`), StepLR decay (gamma=0.5 every 5 epochs)
+- **PyTorch BiLSTM:** 
+  - Input: 36-step sequence (6-hour window at 10-min resolution) $\times$ 27 features
+  - Architecture: 1-layer Bidirectional LSTM (`hidden_dim=64`, bidir=True $\rightarrow$ output dim 128) + Head: `Linear(128, 64) -> ReLU -> Linear(64, 1)`
+- **PyTorch TCN:** 
+  - Dilated causal convolutions with dilation factors $d \in \{1, 2, 4\}$, kernel size $k=3$, residual skip connections + Head: `Linear(64, 64) -> ReLU -> Linear(64, 1)`
+- **PyTorch Transformer:** 
+  - Input Projection: `Linear(27, 64)` + Sinusoidal Positional Encoding
+  - Encoder: 2 TransformerEncoderLayers (`d_model=64`, `nhead=4`, `dim_feedforward=128`, `dropout=0.1`)
+  - Pooling: Temporal average pooling across sequence $\rightarrow$ Head: `Linear(64, 32) -> ReLU -> Linear(32, 1)`
+
+---
+
+## 5. Experiment Tracking with TensorBoard
+
+All 7 models in `runs/` are logged using the **unified 27-feature set**:
+- **`runs/LightGBM`**, **`runs/ExtraTrees`**, **`runs/XGBoost`** (Tree models with 27 features)
+- **`runs/MLP`**, **`runs/LSTM`**, **`runs/TCN`**, **`runs/Transformer`** (PyTorch models with 27 features)
+
+To view the fair interactive comparisons, loss curves, computational graphs, and prediction plots:
+```bash
+tensorboard --logdir=runs/
 ```
-n_estimators: 800
-max_depth: 10
-max_features: 0.5
-min_samples_split: 20
-min_samples_leaf: 10
-bootstrap: True
-```
-Best CV R² (3-fold, tuning only): 0.601
-
-**XGBoost**
-```
-n_estimators: 300
-max_depth: 5
-learning_rate: 0.01
-subsample: 0.7
-colsample_bytree: 0.7
-min_child_weight: 5
-gamma: 0.1
-reg_alpha: 0.5
-reg_lambda: 3.0
-```
-Best CV R² (3-fold, tuning only): 0.606
-
-*(LightGBM's tuned parameters are in `notebooks/02_lightgbm.ipynb`, Section 8.)*
+Navigate to `http://localhost:6006` in your browser.

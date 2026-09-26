@@ -1,124 +1,153 @@
 # Library Energy Consumption Forecasting
 
-Predicting a university library building's power consumption **24 hours ahead**, using electrical
-mains data and occupancy counts from the [I-BLEND dataset](https://doi.org/10.1038/s41597-019-0258-3)
-("I-BLEND, a campus-scale commercial and residential buildings electrical energy dataset").
+Predicting a university library building's electrical power consumption **24 hours ahead** ($t + 144$ steps at 10-minute resolution) using electrical mains readings and occupancy data from the [I-BLEND dataset](https://doi.org/10.1038/s41597-019-0258-3) (*"I-BLEND, a campus-scale commercial and residential buildings electrical energy dataset"*).
 
-Three tree-based models — **LightGBM**, **Extra Trees**, and **XGBoost** — are trained on an
-identical data pipeline and compared head-to-head, so any difference in results reflects the
-models themselves rather than the data setup.
+This repository provides an end-to-end Machine Learning and Deep Learning pipeline:
+- **3 Tree-Based Ensembles**: LightGBM, Extra Trees, XGBoost
+- **4 PyTorch Deep Learning Models**: MLP, BiLSTM, Temporal Convolutional Network (TCN), and Transformer
+- **Centralized Experiment Tracking**: Real-time TensorBoard logging (scalars, loss curves, computational graphs, prediction time-series, and hyperparameter tables)
 
-## Data
+---
 
-Only the **library building's** mains meter and occupancy readings are used from I-BLEND (the
-original dataset covers a full campus of buildings):
+## 1. Repository Structure
 
-| File | Description | Rows | Interval |
-|---|---|---|---|
-| `library_build_mains.csv` | Raw electrical mains readings (power, current, voltage, frequency, power factor) | 1,713,637 | 1 minute |
-| `LB.csv` | Raw occupancy counts | 173,006 | 10 minutes |
-| `library_cleaned_master.csv` | Cleaned, merged output of the notebook below | 118,776 | 10 minutes |
-
-> Raw/intermediate CSVs are large — see [Data files](#data-files) below for how they're handled in
-> this repo.
-
-## Pipeline
-
-### 1. Data cleaning — [`notebooks/01_data_cleaning.ipynb`](notebooks/01_data_cleaning.ipynb)
-- Converts Unix timestamps to `Asia/Kolkata` local time
-- Reconstructs missing `current` via `I = P / (V × PF)`, corrects sign anomalies in `power_factor`
-- Exposes hidden sensor gaps by reindexing onto a complete 1-minute time grid
-- Interpolates only short gaps (≤10 minutes); leaves longer blackouts as `NaN`
-- Downsamples to 10-minute resolution (mean) to match the occupancy data's native interval
-- Merges mains + occupancy on timestamp, drops remaining blackout rows
-- Output: `library_cleaned_master.csv` (118,776 rows, Feb 2014 – Nov 2017)
-
-### 2. Feature engineering (repeated identically in each model notebook)
-- Calendar features: `hour`, `dayofweek`, `month`, `day_of_year`, `weekend`
-- **Gap-aware** lag features (`power_lag_144` = same time yesterday, `power_lag_1008` = same time
-  last week) — a plain `.shift()` would silently pull values from across a sensor gap and mislabel
-  them; each lag is checked against the rolling max of `time_diff` and set to `NaN` if a gap falls
-  inside the window
-- Backward-looking rolling means (`power_roll_mean_144`, `power_roll_mean_1008`) via `.shift(1)`
-  before `.rolling()`, guaranteeing no future leakage
-- Target: `power` shifted 144 steps into the future (24 hours ahead)
-- `current`, `voltage`, `frequency`, `power_factor` are **excluded** as model inputs — `power`
-  correlates with `current` at r ≈ 0.99 (near-restatement of the target), `current` was partially
-  reconstructed from `power` during cleaning (leakage risk), and none of these instantaneous
-  readings would be available at prediction time for a real 24h-ahead forecast anyway
-- After dropping incomplete rows (insufficient history, gap-invalidated features, undefined
-  target): **41,248 rows**
-
-### 3. Train/test split
-Chronological 70/30 split, no shuffling (shuffling a time series before splitting leaks future
-data into training):
-- Train: 28,873 rows (2014-02-26 → 2016-11-20)
-- Test: 12,375 rows (2016-11-20 → 2017-11-02)
-
-### 4. Models — [`notebooks/02_lightgbm.ipynb`](notebooks/02_lightgbm.ipynb), [`03_extratrees.ipynb`](notebooks/03_extratrees.ipynb), [`04_xgboost.ipynb`](notebooks/04_xgboost.ipynb)
-Each notebook:
-- Runs the identical feature engineering + split above
-- Establishes two baselines: naive persistence (`power(t+24h) = power(t)`) and Linear Regression
-- Tunes hyperparameters via `RandomizedSearchCV` (`n_iter=20`) with `TimeSeriesSplit(gap=144)`
-- Reports 5-fold `TimeSeriesSplit(gap=144)` cross-validation on the training set only
-- Fits a final model and evaluates on the untouched test set exactly once
-
-Model-specific adjustments (each justified in that notebook's own markdown):
-- **LightGBM**: early stopping on a held-out 10% slice of the training set; `n_jobs=1` to avoid
-  Colab RAM issues during parallel boosting
-- **Extra Trees**: no early stopping (no boosting sequence to interrupt) — regularization instead
-  comes from tuned `max_depth`/`min_samples_leaf`/`min_samples_split`; `n_jobs=-1` since Extra
-  Trees fits are lighter and embarrassingly parallel
-- **XGBoost**: early stopping via `eval_set`, similar to LightGBM
-
-## Results
-
-Final evaluation on the held-out test set (touched once per notebook):
-
-| Model | MAE (W) | RMSE (W) | R² |
-|---|---|---|---|
-| Naive Persistence (baseline) | 3580 | 6225 | 0.387 |
-| Linear Regression (baseline) | 3989 | 5743 | 0.478 |
-| LightGBM | 3374 | 4643 | 0.659 |
-| Extra Trees | 3271 | 4495 | 0.680 |
-| **XGBoost** | **3180** | **4405** | **0.693** |
-
-All three models clearly outperform both baselines. XGBoost edges out Extra Trees and LightGBM on
-every metric, though the margins between the three tree-based models are modest compared to the
-gap over the baselines.
-
-See [`results/comparison_table.md`](results/comparison_table.md) for the full table including
-cross-validation and train-set metrics.
-
-## Limitations
-
-- **No weather data** — temperature is a major driver of HVAC load and isn't available here
-- **No holiday calendar** — models can't distinguish holidays/breaks from regular weekdays
-- **Static models** — trained once; real deployment would need periodic retraining
-- **Sensor gaps** — 1,124 gaps >10 minutes in the raw mains data; gap-aware feature engineering
-  prevents corrupted lags but rows near a gap still carry less complete history
-- **24-hour horizon only** — a full next-24-hours trajectory would need recursive/multi-output
-  forecasting, which is outside this project's scope
-- **Concept drift** — average power consumption shifts across the multi-year span (see the
-  cleaning notebook's EDA); tree-based models can't extrapolate beyond the range of `power` values
-  seen in training, worth watching for in future work
-
-## Data files
-
-`library_build_mains.csv` (~93 MB) is excluded from version control via `.gitignore` since it
-exceeds comfortable git repo size. To reproduce this project from scratch:
-1. Download the I-BLEND dataset's library building mains and occupancy files
-2. Place them in the repo root as `library_build_mains.csv` and `LB.csv`
-3. Run `notebooks/01_data_cleaning.ipynb` to regenerate `library_cleaned_master.csv`
-
-`library_cleaned_master.csv` (~9 MB) and `LB.csv` are small enough to commit directly.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-jupyter notebook
+```
+.
+├── notebooks/
+│   ├── 01_data_cleaning.ipynb          # Sensor gap alignment, interpolation, downsampling (10-min)
+│   ├── 02_lightgbm.ipynb               # Baseline: LightGBM regressor with TimeSeriesSplit tuning
+│   ├── 03_extratrees.ipynb             # Baseline: Extra Trees regressor
+│   ├── 04_xgboost.ipynb                # Baseline: XGBoost regressor (best tree model)
+│   ├── 05_feature_engineering_v2.ipynb # 27 domain-aware features (cyclical time, calendar, occupancy)
+│   ├── 06_mlp_pytorch.ipynb            # Deep Dense MLP (PyTorch)
+│   ├── 07_lstm_pytorch.ipynb           # Bidirectional LSTM sequence model (PyTorch)
+│   ├── 08_tcn_pytorch.ipynb            # Dilated Causal Temporal Convolutional Network (PyTorch)
+│   └── 09_transformer_pytorch.ipynb    # Multi-Head Self-Attention Transformer (PyTorch)
+├── utils/
+│   ├── __init__.py                     # Package export
+│   └── tb_logger.py                    # Unified SklearnTBLogger and TorchTBLogger for TensorBoard
+├── results/
+│   └── comparison_table.md             # Detailed benchmark report across all 7 models
+├── runs/                               # TensorBoard event runs for all models
+├── library_cleaned_master.csv          # Cleaned 10-min dataset (118,776 rows)
+├── LB.csv                              # Raw occupancy data
+├── requirements.txt                    # Project dependencies
+└── README.md
 ```
 
-Run the notebooks in order: `01_data_cleaning.ipynb` → any of `02`/`03`/`04` (each is
-self-contained and only depends on `library_cleaned_master.csv`).
+---
+
+## 2. Pipeline & Workflow
+
+```
+[Raw Data: LB.csv & mains]
+           │
+           ▼
+[01_data_cleaning.ipynb] ──► library_cleaned_master.csv (118,776 rows)
+           │
+   ┌───────┴────────────────────────────────────────┐
+   ▼                                                ▼
+[Phase 1: Exploratory 8-Feature Baselines]  [05_feature_engineering_v2.ipynb]
+(LightGBM / Extra Trees / XGBoost)                  │
+                                                    ▼
+                                          library_featured_v2.csv (41,248 rows, 27 features)
+                                                    │
+                                  ┌─────────────────┼─────────────────┐
+                                  ▼                 ▼                 ▼
+                       [Phase 2: Tree Models]   [06 MLP]       [07 BiLSTM]
+                       (XGB / LGBM / ET on 27F)     │                 │
+                                                    ▼                 ▼
+                                                [08 TCN]      [09 Transformer]
+                                                    │
+                                                    ▼
+                                         [TensorBoard Dashboard]
+                                        (All 7 Models on 27 Features)
+```
+
+### Step 1: Data Cleaning (`notebooks/01_data_cleaning.ipynb`)
+- Converts timestamps to `Asia/Kolkata` local time.
+- Reconstructs missing electrical `current` via $I = P / (V \times PF)$ and corrects power factor anomalies.
+- Exposes hidden sensor gaps on a 1-minute grid; interpolates only short dropouts ($\le 10$ minutes) and leaves long blackouts as `NaN`.
+- Downsamples to 10-minute resolution to match native occupancy recording.
+- Merges power and occupancy, producing `library_cleaned_master.csv`.
+
+### Step 2: Advanced Feature Engineering (`notebooks/05_feature_engineering_v2.ipynb`)
+Generates 27 continuous, domain-informed features specifically designed for Building Management Systems (BMS):
+- **Cyclical Temporal**: `hour_sin`, `hour_cos`, `dayofweek_sin`, `dayofweek_cos`, `month_sin`, `month_cos` (removes midnight/weekend boundary discontinuities).
+- **Academic Timetable**: `is_class_hour` (8:00–18:00 weekdays), `is_evening_study` (18:00–22:00), `is_night`, `is_exam_month` (Apr, May, Nov, Dec), `is_vacation_month` (Jun, Jul).
+- **Occupancy Dynamics**: 1-hour rolling mean, velocity/delta, and estimated active zones (`rooms_occupied_est`).
+- **Autoregressive Lags & Volatility**: 24h lag (`power_lag_144`), 48h lag (`power_lag_288`), 1-week lag (`power_lag_1008`), and 24h rolling standard deviation.
+
+### Step 3: Model Training & Evaluation
+All models adhere to a **strict chronological 70/30 train/test split**:
+- **Train period**: 28,873 rows (Feb 2014 – Nov 2016)
+- **Test period**: 12,375 rows (Nov 2016 – Nov 2017)
+- Target: Unconstrained linear output for power prediction in Watts (never classification / softmax).
+
+---
+
+## 3. Benchmark Results
+
+### A. Fair 7-Model Benchmark (All Models on Unified 27 Features)
+Evaluated on the exact same 12,375 untouched test readings:
+
+| Rank | Model | Model Family | Test MAE (W) | Test RMSE (W) | Test R² | Train R² | Overfitting Gap |
+|:---:|:---|:---|:---:|:---:|:---:|:---:|:---:|
+| 1 | **XGBoost** | Gradient Boosted Trees | **2,942** | **3,966** | **0.751** | 0.794 | **0.043** |
+| 2 | **LightGBM** | Gradient Boosted Trees | 3,087 | 4,150 | 0.727 | 0.867 | 0.139 |
+| 3 | **Extra Trees** | Randomized Ensembles | 3,279 | 4,278 | 0.710 | 0.946 | 0.235 |
+| 4 | **PyTorch MLP** | Deep Dense Neural Network | 3,469 | 4,636 | 0.660 | 0.828 | 0.168 |
+| 5 | **PyTorch BiLSTM** | Bidirectional Recurrent | 3,850 | 5,183 | 0.576 | 0.761 | 0.185 |
+| 6 | **PyTorch TCN** | Dilated Causal Convolutional | 4,058 | 5,557 | 0.512 | 0.828 | 0.316 |
+| 7 | **PyTorch Transformer** | Multi-Head Self-Attention | 5,030 | 6,887 | 0.251 | 0.850 | 0.599 |
+
+*Baselines: Naive Persistence ($R^2 = 0.387$, MAE = 3,580 W), Linear Regression ($R^2 = 0.478$, MAE = 3,989 W).*
+
+### B. Feature Progression & Ablation (8-Feature Baseline vs. 27-Feature Domain Engineering)
+Demonstrating the direct impact of domain-informed features on tree ensemble performance:
+
+| Model | 8-Feature Test MAE (W) | 8-Feature Test R² | 27-Feature Test MAE (W) | 27-Feature Test R² | Test MAE Gain | Test R² Gain |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **XGBoost** | 3,180 | 0.693 | **2,942** | **0.751** | **-238 W (-7.5%)** | **+0.058 (+8.4%)** |
+| **LightGBM** | 3,374 | 0.659 | **3,087** | **0.727** | **-287 W (-8.5%)** | **+0.068 (+10.3%)** |
+| **Extra Trees** | 3,271 | 0.680 | **3,279** | **0.710** | **-8 W (-0.2%)** | **+0.030 (+4.4%)** |
+
+---
+
+## 4. TensorBoard Experiment Tracking
+
+All training and evaluation runs are logged using `utils/tb_logger.py`:
+
+```bash
+tensorboard --logdir=runs/
+```
+Open **`http://localhost:6006`** to inspect:
+- **`HPARAMS`**: Consolidated comparison table of all 7 models sorted by Test MAE and Test R².
+- **`GRAPHS`**: Computational graphs showing model connectivity down to the `Linear(1)` regression head.
+- **`SCALARS`**: Epoch-by-epoch training and validation loss curves and learning rate schedules.
+- **`IMAGES`**: Actual vs. Predicted 24-hour time series overlays and residual error distributions.
+
+---
+
+## 5. Quickstart
+
+### 1. Installation
+```bash
+# Clone the repository
+git clone <repo-url>
+cd -library-energy-forecasting
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Running the Pipeline
+Open Jupyter Notebook or Jupyter Lab:
+```bash
+jupyter notebook
+```
+Execute notebooks in sequence:
+1. `notebooks/01_data_cleaning.ipynb` *(optional if `library_cleaned_master.csv` is already present)*
+2. `notebooks/02_lightgbm.ipynb`, `03_extratrees.ipynb`, `04_xgboost.ipynb`
+3. `notebooks/05_feature_engineering_v2.ipynb` *(creates `library_featured_v2.csv`)*
+4. `notebooks/06_mlp_pytorch.ipynb`, `07_lstm_pytorch.ipynb`, `08_tcn_pytorch.ipynb`, `09_transformer_pytorch.ipynb`
